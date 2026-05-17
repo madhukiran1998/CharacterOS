@@ -73,6 +73,129 @@ export interface CharacterSpec {
   test_prompts: string[];
 }
 
+export interface CharacterBaselines {
+  // Plutchik baseline values (flat structure — what LLM returns)
+  joy: number;
+  trust: number;
+  fear: number;
+  surprise: number;
+  sadness: number;
+  disgust: number;
+  anger: number;
+  anticipation: number;
+  desire_intensity: number;
+  desire_nature: string;
+  volatility: number;
+  recovery_rate: number;
+  // Decay overrides
+  joy_decay_override: number | null;
+  trust_decay_override: number | null;
+  fear_decay_override: number | null;
+  surprise_decay_override: number | null;
+  sadness_decay_override: number | null;
+  disgust_decay_override: number | null;
+  anger_decay_override: number | null;
+  anticipation_decay_override: number | null;
+  desire_decay_override: number | null;
+  extraction_notes?: string;
+}
+
+export async function extractBaselines(spec: CharacterSpec): Promise<CharacterBaselines> {
+  const step4Raw = await llmCall('Step 4: Emotional Baselines', [
+    {
+      role: 'system',
+      content: `You are extracting emotional baseline parameters for an AI character.
+Given a compiled character spec, extract their emotional resting state and personality modifiers.
+These represent how this character feels when nothing is happening — their natural default.
+
+Return ONLY valid JSON with these exact keys. No other text. No markdown.
+
+Required keys:
+- joy (float 0-1)
+- trust (float 0-1)
+- fear (float 0-1)
+- surprise (float 0-1)
+- sadness (float 0-1)
+- disgust (float 0-1)
+- anger (float 0-1)
+- anticipation (float 0-1)
+- desire_intensity (float 0-1)
+- desire_nature (string: 'romantic' | 'protective' | 'possessive' | 'none')
+- volatility (float 0-1)
+- recovery_rate (float 0-1)
+- joy_decay_override (float or null)
+- trust_decay_override (float or null)
+- fear_decay_override (float or null)
+- surprise_decay_override (float or null)
+- sadness_decay_override (float or null)
+- disgust_decay_override (float or null)
+- anger_decay_override (float or null)
+- anticipation_decay_override (float or null)
+- desire_decay_override (float or null)
+
+Rules:
+- High neuroticism → volatility 0.7-0.9, recovery_rate 0.2-0.4
+- Low neuroticism → volatility 0.1-0.3, recovery_rate 0.6-0.9
+- Warm, open, friendly → higher joy (0.5-0.8), trust (0.4-0.7)
+- Fearful, anxious, traumatized → higher fear (0.4-0.7), lower dominance feeling
+- Proud, dominant, cold → lower joy baseline (0.2-0.4), higher anger baseline (0.2-0.4), lower trust (0.1-0.3)
+- Chaotic, impulsive → high anticipation (0.5-0.7), high surprise baseline (0.3-0.5), high volatility
+- Obsessive, brooding → high anticipation, low surprise
+
+Decay overrides — ONLY set these if character description explicitly implies unusual emotional persistence. Leave null for most characters:
+- 'holds grudges forever' → anger_decay_override: 0.01
+- 'forgets quickly, carefree' → all overrides slightly higher
+- 'eternally loyal, never stops loving' → trust_decay_override: 0.005
+- 'mood swings wildly' → surprise_decay_override: 0.35, joy_decay_override: 0.15
+- 'deeply melancholic' → sadness_decay_override: 0.01
+
+Desire nature comes from relationship type in description:
+- romantic companion → 'romantic'
+- protective mentor/parent figure → 'protective'
+- rival/enemy → 'none' initially
+- possessive/controlling → 'possessive'
+- neutral/friend → 'none'
+
+Desire intensity baseline should start low (0.1-0.2) for most characters — it builds through interaction, not from the start.`,
+    },
+    {
+      role: 'user',
+      content: `Extract emotional baselines for this character. Return ONLY valid JSON:
+
+${JSON.stringify(spec, null, 2)}`,
+    },
+  ]);
+
+  const parsed = extractJSON(step4Raw) as Record<string, unknown>;
+
+  // Normalize: LLM might use 'desire_intensity_baseline' instead of 'desire_intensity'
+  const desireIntensity = (parsed.desire_intensity ?? parsed.desire_intensity_baseline ?? 0.1) as number;
+
+  return {
+    joy: (parsed.joy ?? 0.3) as number,
+    trust: (parsed.trust ?? 0.3) as number,
+    fear: (parsed.fear ?? 0.1) as number,
+    surprise: (parsed.surprise ?? 0.1) as number,
+    sadness: (parsed.sadness ?? 0.1) as number,
+    disgust: (parsed.disgust ?? 0.1) as number,
+    anger: (parsed.anger ?? 0.1) as number,
+    anticipation: (parsed.anticipation ?? 0.2) as number,
+    desire_intensity: desireIntensity,
+    desire_nature: (parsed.desire_nature ?? 'none') as string,
+    volatility: (parsed.volatility ?? 0.5) as number,
+    recovery_rate: (parsed.recovery_rate ?? 0.5) as number,
+    joy_decay_override: (parsed.joy_decay_override ?? null) as number | null,
+    trust_decay_override: (parsed.trust_decay_override ?? null) as number | null,
+    fear_decay_override: (parsed.fear_decay_override ?? null) as number | null,
+    surprise_decay_override: (parsed.surprise_decay_override ?? null) as number | null,
+    sadness_decay_override: (parsed.sadness_decay_override ?? null) as number | null,
+    disgust_decay_override: (parsed.disgust_decay_override ?? null) as number | null,
+    anger_decay_override: (parsed.anger_decay_override ?? null) as number | null,
+    anticipation_decay_override: (parsed.anticipation_decay_override ?? null) as number | null,
+    desire_decay_override: (parsed.desire_decay_override ?? null) as number | null,
+  };
+}
+
 export async function compileCharacter(description: string): Promise<CharacterSpec> {
   // Step 1 — Identity
   const step1Raw = await llmCall('Step 1: Identity', [
