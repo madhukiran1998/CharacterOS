@@ -20,6 +20,14 @@ export interface RelationshipState {
   last_interaction: Date | null;
 }
 
+// Appraisal emotional delta (subset used for relationship nudge)
+export interface AppraisalDelta {
+  trust: number;
+  anger: number;
+  disgust: number;
+  joy: number;
+}
+
 // Event-driven relationship deltas
 export interface RelationshipDelta {
   trust: number;
@@ -273,6 +281,50 @@ export async function applySessionDecay(
   );
 
   console.log(`[RELATIONSHIP] Session decay applied`);
+}
+
+// ─────────────────────────────────────────────────────────────
+// applyAppraisalToRelationship
+// ─────────────────────────────────────────────────────────────
+// Pipes a dampened fraction of the appraisal emotional delta
+// into the relationship state each turn. This is the missing
+// wire between "character feels more trusting" and "relationship
+// trust actually changes."
+//
+// Dampening factor (0.2) keeps individual turns from swinging
+// the relationship too hard — narrative events still dominate.
+// ─────────────────────────────────────────────────────────────
+export async function applyAppraisalToRelationship(
+  characterId: string,
+  userId: string,
+  delta: AppraisalDelta,
+): Promise<void> {
+  const DAMP = 0.2;
+
+  // trust delta → relationship trust (positive appraisal trust raises it, anger/disgust lowers it)
+  const trustNudge = delta.trust * DAMP - (delta.anger * 0.05 + delta.disgust * 0.05);
+  // positive trust → slight intimacy growth; joy also contributes
+  const intimacyNudge = Math.max(0, delta.trust * 0.08 + delta.joy * 0.04);
+  // anger/disgust → resentment
+  const resentmentNudge = Math.max(0, delta.anger * 0.08 + delta.disgust * 0.05);
+
+  if (Math.abs(trustNudge) < 0.001 && intimacyNudge < 0.001 && resentmentNudge < 0.001) return;
+
+  await db.query(
+    `UPDATE relationship_state
+     SET trust      = LEAST(1.0, GREATEST(0.0, trust + $1)),
+         intimacy   = LEAST(1.0, GREATEST(0.0, intimacy + $2)),
+         resentment = LEAST(1.0, GREATEST(0.0, resentment + $3)),
+         trust_source = CASE
+           WHEN $1 >= 0.03 THEN 'earned'
+           WHEN $1 <= -0.02 THEN 'damaged'
+           ELSE trust_source
+         END
+     WHERE character_id = $4 AND user_id = $5`,
+    [trustNudge, intimacyNudge, resentmentNudge, characterId, userId],
+  );
+
+  console.log(`[RELATIONSHIP] Appraisal nudge: trust ${trustNudge >= 0 ? '+' : ''}${trustNudge.toFixed(3)}, intimacy +${intimacyNudge.toFixed(3)}, resentment +${resentmentNudge.toFixed(3)}`);
 }
 
 // ─────────────────────────────────────────────────────────────

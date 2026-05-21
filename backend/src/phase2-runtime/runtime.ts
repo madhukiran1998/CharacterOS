@@ -2,13 +2,13 @@ import { Response } from 'express';
 import { db } from '../db/client';
 import { CharacterSpec } from '../phase1-compiler/compiler';
 import { retrieveMemory } from './memory';
-import { readAndUpdateRelationship, applySessionDecay as applyRelationshipSessionDecay } from './relationship';
+import { readAndUpdateRelationship, applySessionDecay as applyRelationshipSessionDecay, applyAppraisalToRelationship } from './relationship';
 import { loadEmotionState, saveEmotionState, applyEmotionMath } from './emotionState';
 import { loadOpenThreads } from './narrativeThreads';
-import { runReasoningPipeline, deriveDesire } from './reasoning';
+import { buildShallowReasoning, buildDeepReasoning } from './reasoning';
 import { streamResponse, streamTrivialResponse } from './respond';
 import { writeEpisodes } from './writeBack';
-import { runAppraisal } from './appraisal';
+import { runAppraisalAndDesire } from './appraisal';
 import { computePAD, deriveEmotionalState, checkRegenerationTrigger } from '../constants/emotions';
 
 function sendEvent(res: Response, event: object) {
@@ -21,24 +21,23 @@ export async function runRuntimeLoop(
   characterId: string,
   userId: string,
   userMessage: string,
-  res: Response
+  res: Response,
 ): Promise<void> {
   const charResult = await db.query(
     `SELECT spec FROM characters WHERE id = $1`,
-    [characterId]
+    [characterId],
   );
   if (charResult.rows.length === 0) throw new Error(`Character ${characterId} not found`);
   const spec = charResult.rows[0].spec as CharacterSpec;
 
   console.log(`\n====== [RUNTIME] Turn start — character: ${spec.identity.name} | user: ${userId} ======`);
 
-  // === FAST PATH: Trivial input bypass ===
+  // ── Fast path: trivial inputs (greetings) ──
   const isTrivial = TRIVIAL_REGEX.test(userMessage.trim());
   if (isTrivial) {
-    console.log(`[RUNTIME] Trivial input detected — fast path`);
+    console.log(`[RUNTIME] Trivial input — fast path`);
     sendEvent(res, { type: 'step', step: 1, label: 'Fast path (trivial input)...' });
 
-    // Still need emotion state for write-back and debug payload
     const { state: emotionBefore, pad: padBefore, derived: derivedBefore, wasNewSession, hoursSince } =
       await loadEmotionState(characterId, userId);
 
@@ -47,28 +46,23 @@ export async function runRuntimeLoop(
     }
 
     const reply = await streamTrivialResponse(spec, userMessage, res);
-
-    // Write back with minimal debug data
     await writeEpisodes(characterId, userId, userMessage, reply, emotionBefore, []);
 
     sendEvent(res, {
       type: 'done',
       appraisal: {
-        relevance: 0.1,
-        valence: 0,
-        coping: 0.5,
-        norm_violation: 0,
+        relevance: 0.1, valence: 0, coping: 0.5, norm_violation: 0,
         emotional_delta: { joy: 0, trust: 0, fear: 0, surprise: 0, sadness: 0, disgust: 0, anger: 0, anticipation: 0, desire_intensity: 0 },
         appraisal_summary: 'Trivial input — fast path',
       },
       emotion_before: {
-        plutchik: { joy: emotionBefore.joy, trust: emotionBefore.trust, fear: emotionBefore.fear, surprise: emotionBefore.surprise, sadness: emotionBefore.sadness, disgust: emotionBefore.disgust, anger: emotionBefore.anger, anticipation: emotionBefore.anticipation },
+        plutchik: plutchikFields(emotionBefore),
         desire_intensity: emotionBefore.desire_intensity,
         derived_state: derivedBefore.derived_state,
         pad: padBefore,
       },
       emotion_after: {
-        plutchik: { joy: emotionBefore.joy, trust: emotionBefore.trust, fear: emotionBefore.fear, surprise: emotionBefore.surprise, sadness: emotionBefore.sadness, disgust: emotionBefore.disgust, anger: emotionBefore.anger, anticipation: emotionBefore.anticipation },
+        plutchik: plutchikFields(emotionBefore),
         desire_intensity: emotionBefore.desire_intensity,
         desire_target: emotionBefore.desire_target,
         derived_state: derivedBefore.derived_state,
@@ -83,12 +77,7 @@ export async function runRuntimeLoop(
         reasoning_depth: 'shallow',
         force_deep_triggered: false,
       },
-      reasoning: {
-        user_read: 'casual interaction',
-        emotional_state_summary: derivedBefore.derived_state,
-        intended_move: 'respond naturally',
-        forbidden_moves: [],
-      },
+      reasoning: { user_read: 'casual interaction', emotional_state_summary: derivedBefore.derived_state, intended_move: 'respond naturally', forbidden_moves: [] },
       relationship_state: { trust: 0.5, familiarity: 0.1, resentment: 0, intimacy: 0, trust_source: 'default' },
       session: { was_new_session: wasNewSession, hours_since_last: hoursSince, session_decay_applied: wasNewSession ? Math.pow(0.85, hoursSince / 24) : 1.0 },
       open_threads: [],
@@ -98,115 +87,90 @@ export async function runRuntimeLoop(
     return;
   }
 
-  // Step 1 — Memory retrieval
-  sendEvent(res, { type: 'step', step: 1, label: 'Retrieving memories...' });
-  const episodes = await retrieveMemory(characterId, userId, userMessage);
+  // ── Step 1: Parallel DB/embedding work ──
+  sendEvent(res, { type: 'step', step: 1, label: 'Loading context...' });
 
-  // Step 2 — Relationship state
-  sendEvent(res, { type: 'step', step: 2, label: 'Reading relationship state...' });
-  const relationship = await readAndUpdateRelationship(characterId, userId, userMessage);
+  const [episodes, relationship, emotionLoad, baselinesResult] = await Promise.all([
+    retrieveMemory(characterId, userId, userMessage),
+    readAndUpdateRelationship(characterId, userId, userMessage),
+    loadEmotionState(characterId, userId),
+    db.query(`SELECT * FROM character_baselines WHERE character_id = $1`, [characterId]),
+  ]);
 
-  // Step 3 — Appraisal Pipeline
-  sendEvent(res, { type: 'step', step: 3, label: 'Appraising...' });
-
-  // 3A: Load emotional state
-  sendEvent(res, { type: 'substep', substep: '3A', label: 'Loading emotional state...' });
-  const { state: emotionBefore, pad: padBefore, derived: derivedBefore, wasNewSession, hoursSince } =
-    await loadEmotionState(characterId, userId);
+  const { state: emotionBefore, pad: padBefore, derived: derivedBefore, wasNewSession, hoursSince } = emotionLoad;
 
   if (wasNewSession) {
     await applyRelationshipSessionDecay(characterId, userId, hoursSince);
   }
 
-  // 3B: Session decay
-  sendEvent(res, { type: 'substep', substep: '3B', label: 'Session decay applied...' });
+  if (baselinesResult.rows.length === 0) throw new Error(`No baselines for character ${characterId}`);
+  const baseline = baselinesResult.rows[0];
 
-  // 3C + 3E-1: PARALLEL — Appraisal and Desire (they don't depend on each other)
-  sendEvent(res, { type: 'substep', substep: '3C', label: 'Appraising message + deriving desire...' });
-  const [appraisal, desireResult] = await Promise.all([
-    runAppraisal(spec, emotionBefore, episodes, userMessage),
-    deriveDesire(spec, emotionBefore, padBefore, derivedBefore.derived_state, relationship),
-  ]);
+  // ── Step 2: Single pre-response LLM call (appraisal + desire merged) ──
+  sendEvent(res, { type: 'step', step: 2, label: 'Appraising...' });
 
-  // 3D: Emotion math (pure code)
-  sendEvent(res, { type: 'substep', substep: '3D', label: 'Computing emotions...' });
-  const baselines = await db.query(
-    `SELECT * FROM character_baselines WHERE character_id = $1`,
-    [characterId]
+  const { appraisal, desire: desireResult } = await runAppraisalAndDesire(
+    spec, emotionBefore, padBefore, derivedBefore.derived_state, relationship, episodes, userMessage,
   );
-  if (baselines.rows.length === 0) throw new Error(`No baselines for character ${characterId}`);
-  const baseline = baselines.rows[0];
+
+  // ── Step 3: Emotion math (pure code, instant) ──
+  sendEvent(res, { type: 'step', step: 3, label: 'Computing emotions...' });
 
   const emotionAfterMath = applyEmotionMath(emotionBefore, baseline, appraisal.emotional_delta);
   const padAfter = computePAD(emotionAfterMath);
   const derivedAfter = deriveEmotionalState(emotionAfterMath, padAfter);
+
   const momentum = (() => {
-    const prevSum = emotionBefore.joy + emotionBefore.trust + emotionBefore.fear + emotionBefore.surprise +
-      emotionBefore.sadness + emotionBefore.disgust + emotionBefore.anger + emotionBefore.anticipation;
-    const newSum = emotionAfterMath.joy + emotionAfterMath.trust + emotionAfterMath.fear + emotionAfterMath.surprise +
-      emotionAfterMath.sadness + emotionAfterMath.disgust + emotionAfterMath.anger + emotionAfterMath.anticipation;
-    if (newSum > prevSum + 0.15) return 'rising';
-    if (newSum < prevSum - 0.15) return 'falling';
+    const prev = sumEmotions(emotionBefore);
+    const next = sumEmotions(emotionAfterMath);
+    if (next > prev + 0.15) return 'rising';
+    if (next < prev - 0.15) return 'falling';
     return 'stable';
   })();
 
   const forceDeep = checkRegenerationTrigger(padBefore, padAfter, emotionBefore.desire_intensity, emotionAfterMath.desire_intensity);
 
-  // 3E: Depth decision + Objective (conditional)
-  sendEvent(res, { type: 'substep', substep: '3E', label: 'Deriving objectives...' });
+  // Depth decision (pure logic, no LLM)
+  const depth: 'shallow' | 'moderate' | 'deep' =
+    forceDeep || appraisal.relevance > 0.6 ? 'deep' :
+    appraisal.relevance > 0.3 ? 'moderate' : 'shallow';
+
+  console.log(`[RUNTIME] Depth: ${depth} (relevance: ${appraisal.relevance.toFixed(2)}, forceDeep: ${forceDeep})`);
+
+  const reasoning =
+    depth === 'shallow'
+      ? buildShallowReasoning(desireResult.desire, desireResult.desire_strength, derivedAfter.derived_state)
+      : buildDeepReasoning(desireResult.desire, desireResult.desire_strength, derivedAfter.derived_state, depth);
+
+  // Load open threads (fast DB query, do it here)
   const openThreads = await loadOpenThreads(characterId, userId);
 
-  let depth: 'shallow' | 'moderate' | 'deep';
-  if (forceDeep || appraisal.relevance > 0.6) {
-    depth = 'deep';
-  } else if (appraisal.relevance > 0.3) {
-    depth = 'moderate';
-  } else {
-    depth = 'shallow';
-  }
+  // Pipe appraisal trust/anger/disgust/joy into relationship state (fire-and-forget)
+  applyAppraisalToRelationship(characterId, userId, {
+    trust: appraisal.emotional_delta.trust,
+    anger: appraisal.emotional_delta.anger,
+    disgust: appraisal.emotional_delta.disgust,
+    joy: appraisal.emotional_delta.joy,
+  }).catch((err) => console.error('[RELATIONSHIP] Appraisal nudge failed (non-fatal):', err));
 
-  let objectiveResult: { objective: string; user_read: string; emotional_state_summary: string; intended_move: string; forbidden_moves: string[] };
-
-  if (depth === 'shallow') {
-    console.log(`[REASONING] Shallow path — skipping objective derivation`);
-    objectiveResult = {
-      objective: desireResult.desire,
-      user_read: 'casual interaction',
-      emotional_state_summary: derivedAfter.derived_state,
-      intended_move: 'respond naturally',
-      forbidden_moves: [],
-    };
-  } else {
-    const { deriveObjective } = await import('./reasoning');
-    objectiveResult = await deriveObjective(
-      spec, emotionAfterMath, padAfter, derivedAfter.derived_state, desireResult.desire,
-      relationship, openThreads, episodes, appraisal, userMessage
-    );
-  }
-
-  const reasoning = {
-    ...desireResult,
-    ...objectiveResult,
-    reasoning_depth: depth,
-  };
-
-  // Save updated emotion state
+  // Save emotion state
   await saveEmotionState(
     characterId, userId, emotionAfterMath, derivedAfter, momentum,
-    reasoning.desire, reasoning.objective
+    reasoning.desire, reasoning.objective,
   );
 
-  // Step 4 — Stream response
+  // ── Step 4: Stream response (objective reasoning now inline) ──
   sendEvent(res, { type: 'step', step: 4, label: 'Responding...' });
+
   const reply = await streamResponse(
-    spec, episodes, relationship, reasoning, emotionAfterMath, padAfter, derivedAfter, userMessage, res
+    spec, episodes, relationship, reasoning, emotionAfterMath, padAfter, derivedAfter, userMessage, res,
   );
 
-  // Step 5 — Write back
+  // ── Step 5: Write back + thread detection (async) ──
   sendEvent(res, { type: 'step', step: 5, label: 'Saving...' });
+
   const writeBackResult = await writeEpisodes(characterId, userId, userMessage, reply, emotionAfterMath, openThreads);
 
-  // Send full debug state to frontend
   sendEvent(res, {
     type: 'done',
     appraisal: {
@@ -218,31 +182,13 @@ export async function runRuntimeLoop(
       appraisal_summary: appraisal.appraisal_summary,
     },
     emotion_before: {
-      plutchik: {
-        joy: emotionBefore.joy,
-        trust: emotionBefore.trust,
-        fear: emotionBefore.fear,
-        surprise: emotionBefore.surprise,
-        sadness: emotionBefore.sadness,
-        disgust: emotionBefore.disgust,
-        anger: emotionBefore.anger,
-        anticipation: emotionBefore.anticipation,
-      },
+      plutchik: plutchikFields(emotionBefore),
       desire_intensity: emotionBefore.desire_intensity,
       derived_state: derivedBefore.derived_state,
       pad: padBefore,
     },
     emotion_after: {
-      plutchik: {
-        joy: emotionAfterMath.joy,
-        trust: emotionAfterMath.trust,
-        fear: emotionAfterMath.fear,
-        surprise: emotionAfterMath.surprise,
-        sadness: emotionAfterMath.sadness,
-        disgust: emotionAfterMath.disgust,
-        anger: emotionAfterMath.anger,
-        anticipation: emotionAfterMath.anticipation,
-      },
+      plutchik: plutchikFields(emotionAfterMath),
       desire_intensity: emotionAfterMath.desire_intensity,
       desire_target: emotionAfterMath.desire_target,
       derived_state: derivedAfter.derived_state,
@@ -269,7 +215,10 @@ export async function runRuntimeLoop(
       hours_since_last: hoursSince,
       session_decay_applied: wasNewSession ? Math.pow(0.85, hoursSince / 24) : 1.0,
     },
-    open_threads: openThreads,
+    open_threads: [
+      ...openThreads.filter(t => !writeBackResult.threadResult.resolvedThreadIds.includes(t.id)),
+      ...writeBackResult.threadResult.newThreads,
+    ],
     narrative: {
       new_threads: writeBackResult.threadResult.newThreads.map((t) => ({
         type: t.type,
@@ -287,4 +236,12 @@ export async function runRuntimeLoop(
   });
 
   console.log(`====== [RUNTIME] Turn complete ======\n`);
+}
+
+function plutchikFields(e: { joy: number; trust: number; fear: number; surprise: number; sadness: number; disgust: number; anger: number; anticipation: number }) {
+  return { joy: e.joy, trust: e.trust, fear: e.fear, surprise: e.surprise, sadness: e.sadness, disgust: e.disgust, anger: e.anger, anticipation: e.anticipation };
+}
+
+function sumEmotions(e: { joy: number; trust: number; fear: number; surprise: number; sadness: number; disgust: number; anger: number; anticipation: number }): number {
+  return e.joy + e.trust + e.fear + e.surprise + e.sadness + e.disgust + e.anger + e.anticipation;
 }

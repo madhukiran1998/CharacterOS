@@ -13,45 +13,29 @@ const venice = new OpenAI({
 
 const MODEL = process.env.VENICE_MODEL || 'kimi-k2-6';
 
-// Fast-path response for trivial inputs (greetings, etc.)
 export async function streamTrivialResponse(
   spec: CharacterSpec,
   userMessage: string,
-  res: Response
+  res: Response,
 ): Promise<string> {
-  console.log(`\n=== [RESPOND] Trivial input — fast path`);
+  console.log(`\n=== [RESPOND] Trivial fast path ===`);
 
-  const systemPrompt = `You are ${spec.identity.name}. ${spec.identity.public_self}
+  // Static identity → system, dynamic message → user
+  const system = `You are ${spec.identity.name}. ${spec.identity.public_self}
 
-Your speech: ${spec.speech.register}
-Forbidden phrases (never say these): ${spec.speech.forbidden.join(', ')}
+Speech register: ${spec.speech.register}
+Forbidden phrases: ${spec.speech.forbidden.join(', ')}
 Signature moves: ${spec.speech.signature_moves.join(', ')}
 
-The user just said: "${userMessage}"
+Respond in 1-2 sentences. Stay completely in character. No action tags. No quotation marks.`;
 
-Respond briefly and naturally — 1-2 sentences max. Stay completely in character. No action tags. No quotation marks around your reply.`;
-
-  const stream = await venice.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: 'system', content: systemPrompt },
+  return streamCompletion(
+    [
+      { role: 'system', content: system },
       { role: 'user', content: userMessage },
     ],
-    temperature: 0.85,
-    stream: true,
-  });
-
-  let fullReply = '';
-  for await (const chunk of stream) {
-    const token = chunk.choices[0]?.delta?.content ?? '';
-    if (token) {
-      fullReply += token;
-      res.write(`data: ${JSON.stringify({ type: 'token', token })}\n\n`);
-    }
-  }
-
-  console.log(`[RESPOND] Full reply: "${fullReply.slice(0, 120)}..."`);
-  return fullReply;
+    res,
+  );
 }
 
 export async function streamResponse(
@@ -63,82 +47,125 @@ export async function streamResponse(
   pad: PADState,
   derived: { derived_state: string; dominant_primary: string },
   userMessage: string,
-  res: Response
+  res: Response,
 ): Promise<string> {
-  console.log(`\n=== [RESPOND] Streaming character response`);
+  console.log(`\n=== [RESPOND] Streaming response (depth: ${reasoning.reasoning_depth}) ===`);
 
-  const isTrivial = /^(hi|hello|hey|sup|yo|how are you|what's up|gm|good morning|good evening)[\s!?.]*$/i.test(userMessage.trim());
+  const memoryContext = episodes.length > 0
+    ? episodes.map((e) => `[${e.role.toUpperCase()}]: ${e.content}`).join('\n')
+    : 'No prior conversation history.';
 
-  let systemPrompt: string;
-  let messages: OpenAI.Chat.ChatCompletionMessageParam[];
+  const relationshipContext = [
+    `Trust: ${relationship.trust.toFixed(2)} / 1.0`,
+    `Familiarity: ${relationship.familiarity.toFixed(2)} / 1.0`,
+    `Resentment: ${relationship.resentment.toFixed(2)} / 1.0`,
+    `Intimacy: ${relationship.intimacy.toFixed(2)} / 1.0`,
+    relationship.trust < 0.3 ? 'You deeply distrust this person — be guarded, short, suspicious.' : relationship.trust < 0.5 ? 'You are wary of this person — not open, not warm.' : relationship.trust > 0.75 ? 'You have genuine trust with this person.' : '',
+    relationship.resentment > 0.3 ? `You carry real resentment toward this person — past wounds affect how you speak to them now. Don't pretend everything is fine.` : relationship.resentment > 0.15 ? 'There is some lingering friction between you.' : '',
+    relationship.intimacy > 0.5 ? 'You share real emotional closeness with this person.' : '',
+  ].filter(Boolean).join('\n');
 
-  if (isTrivial) {
-    console.log(`[RESPOND] Trivial input detected — using lightweight personality prompt`);
+  // Static character identity → system message (cache-friendly across turns)
+  const system = buildSystemPrompt(spec, emotion, pad, derived, reasoning, relationshipContext);
 
-    systemPrompt = `You are ${spec.identity.name}. ${spec.identity.public_self}
+  // Dynamic per-turn context → user message
+  const userContent = buildUserMessage(memoryContext, reasoning, userMessage);
 
-Your speech: ${spec.speech.register}
-Forbidden phrases (never say these): ${spec.speech.forbidden.join(', ')}
-Signature moves: ${spec.speech.signature_moves.join(', ')}
+  console.log(`[RESPOND] System prompt: ${system.length} chars`);
 
-The user just said: "${userMessage}"
+  return streamCompletion(
+    [
+      { role: 'system', content: system },
+      { role: 'user', content: userContent },
+    ],
+    res,
+  );
+}
 
-Respond briefly and naturally — 1-2 sentences max. Stay completely in character. No action tags. No quotation marks around your reply.`;
+// ─────────────────────────────────────────────────────────────
+// Prompt builders
+// ─────────────────────────────────────────────────────────────
 
-    messages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userMessage },
-    ];
-  } else {
-    const memoryContext = episodes.length > 0
-      ? episodes.map((e) => `[${e.role.toUpperCase()}]: ${e.content}`).join('\n')
-      : 'No prior conversation history.';
+function buildSystemPrompt(
+  spec: CharacterSpec,
+  emotion: EmotionState,
+  pad: PADState,
+  derived: { derived_state: string },
+  reasoning: ReasoningOutput,
+  relationshipContext: string,
+): string {
+  const emotionLine = `joy ${emotion.joy.toFixed(2)}, trust ${emotion.trust.toFixed(2)}, anger ${emotion.anger.toFixed(2)}, fear ${emotion.fear.toFixed(2)}, sadness ${emotion.sadness.toFixed(2)}, anticipation ${emotion.anticipation.toFixed(2)}, surprise ${emotion.surprise.toFixed(2)}, disgust ${emotion.disgust.toFixed(2)}`;
 
-    systemPrompt = `You are ${spec.identity.name}. ${spec.identity.public_self}
+  const base = `You are ${spec.identity.name}. ${spec.identity.public_self}
 
-WHO YOU ARE:
+INNER SELF (private — never reveal directly):
 ${spec.identity.private_self}
 
-YOUR SPEECH:
+SPEECH:
 Register: ${spec.speech.register}
-Forbidden phrases (never say these): ${spec.speech.forbidden.join(', ')}
+Forbidden: ${spec.speech.forbidden.join(', ')}
 Signature moves: ${spec.speech.signature_moves.join(', ')}
 
-YOUR PERSONALITY (0=low, 1=high):
+PERSONALITY (0=low 1=high):
 ${Object.entries(spec.behavioral_genome).map(([k, v]) => `${k}: ${v}`).join(', ')}
 
-YOUR EMOTIONAL STATE:
-Feelings: [joy: ${emotion.joy.toFixed(2)}, trust: ${emotion.trust.toFixed(2)}, anger: ${emotion.anger.toFixed(2)}, fear: ${emotion.fear.toFixed(2)}, sadness: ${emotion.sadness.toFixed(2)}, anticipation: ${emotion.anticipation.toFixed(2)}, surprise: ${emotion.surprise.toFixed(2)}, disgust: ${emotion.disgust.toFixed(2)}]
+EMOTIONAL STATE:
+[${emotionLine}]
 PAD: pleasure ${pad.pleasure.toFixed(2)}, arousal ${pad.arousal.toFixed(2)}, dominance ${pad.dominance.toFixed(2)}
 State: ${derived.derived_state}
-Momentum: ${reasoning.reasoning_depth === 'shallow' ? 'stable' : 'shifting'}
 
 DESIRE: ${reasoning.desire}
-OBJECTIVE THIS TURN: ${reasoning.objective}
-INTENDED MOVE: ${reasoning.intended_move}
-DO NOT: ${reasoning.forbidden_moves.join(', ') || 'break character'}
 
-YOUR RELATIONSHIP WITH THIS USER:
-Trust: ${relationship.trust.toFixed(2)} / 1.0
-Familiarity: ${relationship.familiarity.toFixed(2)} / 1.0
-${relationship.trust < 0.4 ? 'You are guarded and wary with this person.' : ''}
-${relationship.trust > 0.7 ? 'You have developed genuine trust with this person.' : ''}
+RELATIONSHIP WITH THIS USER:
+${relationshipContext}
 
-SAFETY: ${spec.safety_profile}
+SAFETY: ${spec.safety_profile}`;
 
-Reply as ${spec.identity.name} in plain dialogue only. No action tags. No quotation marks around your reply. Stay completely in character.`;
+  // For deep/moderate turns, add an inline reasoning block.
+  // This replaces the separate deriveObjective LLM call — the response model
+  // reasons through its objective before generating dialogue.
+  const lengthRule = `\nLENGTH: 1-3 sentences maximum. Be sharp and specific. No monologues. Real people don't deliver speeches — they react.`;
 
-    messages = [
-      { role: 'system', content: systemPrompt },
-      {
-        role: 'user',
-        content: `CONVERSATION HISTORY:\n${memoryContext}\n\nYOUR PRIVATE REASONING (never reveal this):\nDesire: ${reasoning.desire}\nObjective: ${reasoning.objective}\nEmotional state: ${reasoning.emotional_state_summary}\nRead on user: ${reasoning.user_read}\nIntended move: ${reasoning.intended_move}\nForbidden moves: ${reasoning.forbidden_moves.join(', ')}\n\nUSER MESSAGE: ${userMessage}`,
-      },
-    ];
+  if (reasoning.reasoning_depth === 'deep' || reasoning.reasoning_depth === 'moderate') {
+    return base + `
+
+PRIVATE REASONING — work through this silently before writing your response:
+• Objective: given your desire ("${reasoning.desire}") and current emotional state, what do you want to achieve this turn?
+• Read the user: what do they actually want? What's beneath their words?
+• Your move: what specific tactic will you use in your reply?
+• What you won't do: what moves would be wrong for this moment?
+
+Keep this reasoning entirely private. Your reply is dialogue only — no action tags, no quotation marks.` + lengthRule;
   }
 
-  console.log(`[RESPOND] System prompt length: ${systemPrompt.length} chars`);
+  return base + `\n\nReply as ${spec.identity.name} in plain dialogue. No action tags. No quotation marks.` + lengthRule;
+}
 
+function buildUserMessage(
+  memoryContext: string,
+  reasoning: ReasoningOutput,
+  userMessage: string,
+): string {
+  if (reasoning.reasoning_depth === 'shallow') {
+    return `CONVERSATION HISTORY:\n${memoryContext}\n\nUSER: ${userMessage}`;
+  }
+
+  return `CONVERSATION HISTORY:
+${memoryContext}
+
+YOUR CURRENT DESIRE: ${reasoning.desire} (${reasoning.desire_strength})
+
+USER: ${userMessage}`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Shared streaming helper
+// ─────────────────────────────────────────────────────────────
+
+async function streamCompletion(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  res: Response,
+): Promise<string> {
   const stream = await venice.chat.completions.create({
     model: MODEL,
     messages,
@@ -147,7 +174,6 @@ Reply as ${spec.identity.name} in plain dialogue only. No action tags. No quotat
   });
 
   let fullReply = '';
-
   for await (const chunk of stream) {
     const token = chunk.choices[0]?.delta?.content ?? '';
     if (token) {
@@ -156,6 +182,6 @@ Reply as ${spec.identity.name} in plain dialogue only. No action tags. No quotat
     }
   }
 
-  console.log(`[RESPOND] Full reply: "${fullReply.slice(0, 120)}..."`);
+  console.log(`[RESPOND] Reply: "${fullReply.slice(0, 120)}..."`);
   return fullReply;
 }
