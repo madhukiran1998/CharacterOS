@@ -90,9 +90,24 @@
 }
 .landing-root .topnav .brand {
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
-.landing-root .topnav .brand .slash { color: var(--ink-3); }
+.landing-root .topnav .brand-mark {
+  width: 15px; height: 15px;
+  flex-shrink: 0;
+  animation: brand-spin 8s linear infinite;
+}
+@keyframes brand-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.landing-root .topnav .brand-os {
+  color: var(--live);
+  margin-left: 3px;
+}
 .landing-root .topnav .meta {
   display: flex; gap: 18px;
   color: var(--ink-3);
@@ -1566,6 +1581,137 @@
 }
 .landing-root .beta-foot span { display: inline-flex; align-items: center; }
 
+/* ─── FEATURE PILLARS ─── */
+.landing-root .pillars-section { padding-top: 0; border-top: none; }
+.landing-root .pillars {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.landing-root .pillar {
+  padding: 32px 28px;
+  background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-right: 1px solid var(--line);
+  transition: background 0.18s;
+  text-decoration: none;
+  color: inherit;
+}
+.landing-root .pillar:last-child { border-right: none; }
+.landing-root .pillar:hover { background: var(--bg-2); }
+.landing-root .pillar-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.landing-root .pillar-num {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--ink-3);
+}
+.landing-root .pillar-tag {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+.landing-root .pillar-head {
+  font-family: var(--lsans);
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.2;
+}
+.landing-root .pillar-body {
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.65;
+  margin: 0;
+  flex: 1;
+}
+.landing-root .pillar-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
+.landing-root .pillar-stat {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+}
+.landing-root .pillar-cta {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: opacity 0.15s;
+}
+.landing-root .pillar:hover .pillar-cta { opacity: 0.7; }
+.landing-root .pillars-foot {
+  margin-top: 20px;
+  text-align: right;
+}
+.landing-root .pillars-docs-link {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  transition: color 0.15s;
+}
+.landing-root .pillars-docs-link:hover { color: var(--ink); }
+
+/* ─── DOCS PAGE ─── */
+.landing-root .docs-hero {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 80px 40px 60px;
+  border-bottom: 1px solid var(--line);
+}
+.landing-root .docs-hero-inner { max-width: 760px; }
+.landing-root .docs-hero-title {
+  font-family: var(--lsans);
+  font-size: clamp(36px, 5vw, 64px);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 0.96;
+  margin: 0 0 20px;
+  color: var(--ink);
+}
+.landing-root .docs-hero-sub {
+  font-size: 14px;
+  color: var(--ink-2);
+  line-height: 1.65;
+  max-width: 580px;
+  margin: 0 0 36px;
+}
+.landing-root .docs-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.landing-root .docs-toc-item {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--bg-1);
+  transition: color 0.15s, border-color 0.15s;
+}
+.landing-root .docs-toc-item:hover {
+  color: var(--ink);
+  border-color: var(--line-2);
+}
+
 /* ─── Responsive ─── */
 
 /* Prevent horizontal scroll globally */
@@ -1588,6 +1734,11 @@
 }
 
 @media (max-width: 768px) {
+  /* Pillars stack */
+  .landing-root .pillars { grid-template-columns: 1fr; }
+  .landing-root .pillar { border-right: none; border-bottom: 1px solid var(--line); }
+  .landing-root .pillar:last-child { border-bottom: none; }
+
   /* Reduce section padding */
   .landing-root .section { padding: 80px 28px; margin-bottom: 48px; }
 
