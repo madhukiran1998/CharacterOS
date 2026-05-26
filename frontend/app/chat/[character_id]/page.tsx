@@ -73,6 +73,7 @@ export default function ChatPage({ params }: { params: Promise<{ character_id: s
 
   const [userId, setUserId]       = useState('');
   const [userIdSet, setUserIdSet] = useState(false);
+  const [characterName, setCharacterName] = useState<string>('');
   const [messages, setMessages]   = useState<Message[]>([]);
   const [input, setInput]         = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -81,7 +82,8 @@ export default function ChatPage({ params }: { params: Promise<{ character_id: s
   const [currentTurn, setCurrentTurn]       = useState<TurnDebug | null>(null);
   const [selectedTurnIndex, setSelectedTurnIndex] = useState<number>(-1);
   const [pipeline, setPipeline]   = useState<PipelineStep[]>(freshPipeline());
-  const [leftWidth, setLeftWidth] = useState(384); // px — matches w-96
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [leftWidth, setLeftWidth] = useState(340);
   const isDragging = useRef(false);
   const dragStart  = useRef(0);
   const widthStart = useRef(0);
@@ -105,6 +107,13 @@ export default function ChatPage({ params }: { params: Promise<{ character_id: s
     window.addEventListener('mouseup', onMouseUp);
     return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
   }, []);
+
+  useEffect(() => {
+    fetch(`http://localhost:3001/api/characters/${character_id}`)
+      .then(r => r.json())
+      .then(d => d.identity?.name && setCharacterName(d.identity.name))
+      .catch(() => {});
+  }, [character_id]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, streaming]);
 
@@ -239,8 +248,8 @@ export default function ChatPage({ params }: { params: Promise<{ character_id: s
   return (
     <div className="flex h-screen bg-black overflow-hidden text-white">
 
-      {/* ── LEFT: TABBED DEBUG PANEL ─────────────────────────── */}
-      <aside style={{ width: leftWidth }} className="shrink-0 border-r border-gray-800/50 flex flex-col bg-gray-950/40">
+      {/* ── LEFT: INSPECTOR PANEL ────────────────────────────── */}
+      {inspectorOpen && <aside style={{ width: leftWidth }} className="shrink-0 border-r border-gray-800/50 flex flex-col bg-gray-950/40">
 
         {/* Tab bar */}
         <div className="flex border-b border-gray-800/50 shrink-0">
@@ -397,24 +406,43 @@ export default function ChatPage({ params }: { params: Promise<{ character_id: s
           )}
 
         </div>
-      </aside>
+      </aside>}
 
-      {/* ── DRAG HANDLE ──────────────────────────────────────── */}
-      <div
-        onMouseDown={onDividerMouseDown}
-        className="w-1 shrink-0 cursor-col-resize hover:bg-gray-600 active:bg-gray-500 transition-colors"
-        style={{ background: 'transparent' }}
-      />
+      {/* ── DRAG HANDLE (only when inspector open) ───────────── */}
+      {inspectorOpen && (
+        <div
+          onMouseDown={onDividerMouseDown}
+          className="w-1 shrink-0 cursor-col-resize hover:bg-gray-600 active:bg-gray-500 transition-colors"
+          style={{ background: 'transparent' }}
+        />
+      )}
 
       {/* ── RIGHT: CHAT ──────────────────────────────────────── */}
       <main className="flex-1 flex flex-col min-w-0">
-        <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-800/50 shrink-0">
-          <button onClick={() => router.push('/chat')} className="text-gray-600 hover:text-gray-300 text-sm">←</button>
-          <div>
-            <p className="text-xs text-gray-600 font-mono">{character_id.slice(0, 12)}…</p>
-            <p className="text-xs text-gray-500 font-mono">user: <span className="text-gray-300">{userId}</span></p>
+        <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-800/50 shrink-0" style={{ fontFamily: "'Geist Mono', monospace" }}>
+          <button onClick={() => router.push('/characters')} className="text-gray-600 hover:text-gray-300 text-sm">←</button>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-gray-200 truncate" style={{ fontFamily: "'Geist', sans-serif" }}>
+              {characterName || character_id.slice(0, 12) + '…'}
+            </p>
+            <p className="text-xs text-gray-600 font-mono">
+              {userId && <>user: <span className="text-gray-500">{userId}</span> · </>}
+              turn {turnHistory.length}
+              {streaming && <span className="text-orange-400 animate-pulse"> · thinking…</span>}
+            </p>
           </div>
           {displayTurn && <DepthBadge depth={displayTurn.goal_state.reasoning_depth} forced={displayTurn.goal_state.force_deep_triggered} />}
+          <button
+            onClick={() => setInspectorOpen(v => !v)}
+            className="text-xs font-mono px-2 py-1 rounded border transition-colors"
+            style={{
+              borderColor: inspectorOpen ? 'rgba(143,214,168,0.3)' : '#1f2937',
+              color: inspectorOpen ? '#8fd6a8' : '#4b5563',
+              background: inspectorOpen ? 'rgba(143,214,168,0.06)' : 'transparent',
+            }}
+          >
+            {inspectorOpen ? 'inspector ✕' : 'inspector'}
+          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">

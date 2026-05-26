@@ -7,14 +7,98 @@ const router = Router();
 router.get('/characters', async (_req: Request, res: Response) => {
   try {
     const result = await db.query(
-      `SELECT id, created_at, spec->'identity' AS identity
-       FROM characters
-       ORDER BY created_at DESC`
+      `SELECT
+         c.id,
+         c.created_at,
+         c.spec->'identity' AS identity,
+         (
+           SELECT row_to_json(es)
+           FROM (
+             SELECT derived_state, dominant_primary, momentum,
+                    joy, trust, fear, surprise, sadness, disgust, anger, anticipation,
+                    last_updated
+             FROM emotional_state
+             WHERE character_id = c.id
+             ORDER BY last_updated DESC
+             LIMIT 1
+           ) es
+         ) AS emotional_state,
+         (
+           SELECT row_to_json(rs)
+           FROM (
+             SELECT session_count, last_interaction, trust, familiarity
+             FROM relationship_state
+             WHERE character_id = c.id
+             ORDER BY last_interaction DESC NULLS LAST
+             LIMIT 1
+           ) rs
+         ) AS relationship,
+         (SELECT COUNT(*)::int FROM episodes WHERE character_id = c.id) AS episodes
+       FROM characters c
+       ORDER BY c.created_at DESC`
     );
     res.json({ characters: result.rows });
   } catch (err) {
     console.error('[CHARACTERS] Error:', err);
     res.status(500).json({ error: 'Failed to fetch characters' });
+  }
+});
+
+router.get('/characters/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  try {
+    const [charResult, stateResult, relResult, episodeResult] = await Promise.all([
+      db.query(`SELECT id, created_at, spec FROM characters WHERE id = $1`, [id]),
+      db.query(
+        `SELECT derived_state, dominant_primary, momentum,
+         joy, trust, fear, surprise, sadness, disgust, anger, anticipation,
+         desire_intensity, desire_target, last_updated
+         FROM emotional_state WHERE character_id = $1 ORDER BY last_updated DESC LIMIT 1`,
+        [id]
+      ),
+      db.query(
+        `SELECT session_count, last_interaction, trust, familiarity, resentment, intimacy
+         FROM relationship_state WHERE character_id = $1 ORDER BY last_interaction DESC NULLS LAST LIMIT 1`,
+        [id]
+      ),
+      db.query(`SELECT COUNT(*)::int as count FROM episodes WHERE character_id = $1`, [id]),
+    ]);
+
+    if (charResult.rows.length === 0) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+
+    const char = charResult.rows[0];
+    res.json({
+      id: char.id,
+      created_at: char.created_at,
+      identity: char.spec.identity,
+      emotional_state: stateResult.rows[0] || null,
+      relationship: relResult.rows[0] || null,
+      episodes: episodeResult.rows[0].count,
+    });
+  } catch (err) {
+    console.error('[CHARACTER] Error:', err);
+    res.status(500).json({ error: 'Failed to fetch character' });
+  }
+});
+
+router.get('/stats', async (_req: Request, res: Response) => {
+  try {
+    const [episodes, threads, chars] = await Promise.all([
+      db.query(`SELECT COUNT(*)::int AS count FROM episodes`),
+      db.query(`SELECT COUNT(*)::int AS count FROM narrative_threads WHERE status = 'open'`),
+      db.query(`SELECT COUNT(*)::int AS count FROM characters`),
+    ]);
+    res.json({
+      episodes: episodes.rows[0].count,
+      open_threads: threads.rows[0].count,
+      characters: chars.rows[0].count,
+    });
+  } catch (err) {
+    console.error('[STATS] Error:', err);
+    res.status(500).json({ error: 'Failed to fetch stats' });
   }
 });
 

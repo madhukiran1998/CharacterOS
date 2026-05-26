@@ -10,6 +10,7 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 import compilerRoutes from './phase1-compiler/routes';
 import runtimeRoutes from './phase2-runtime/routes';
+import waitlistRoutes from './waitlist/routes';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -19,6 +20,7 @@ app.use(express.json());
 
 app.use('/api', compilerRoutes);
 app.use('/api', runtimeRoutes);
+app.use('/api', waitlistRoutes);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 

@@ -641,17 +641,17 @@ function VaultSection() {
   return (
     <section className="section" id="privacy-section">
       <div className="section-head">
-        <div className="section-id"><span className="num">// 07</span><span className="name">Private by construction · local vault</span></div>
-        <h2 className="section-title">Everything stays <span className="alt">on</span> <span className="acc">your machine.</span></h2>
+        <div className="section-id"><span className="num">// 07</span><span className="name">Private by construction · wallet-encrypted</span></div>
+        <h2 className="section-title">Your wallet. <span className="alt">Your</span> <span className="acc">keys.</span></h2>
       </div>
       <p className="section-sub" style={{marginTop:-32, marginBottom: 56}}>
-        Memories, emotions, relationships — encrypted locally. Inference via Venice.ai with zero retention. Custom models on Nillion TEE. Nothing leaves your device.
+        Memories, emotions, relationships — encrypted with your wallet signature. Inference via Venice.ai with zero retention. Custom models on Nillion TEE. Only you can decrypt.
       </p>
       <div className="vault-grid">
         <div className="vault-diagram">
           <div className="vault-h">
-            <span>Vault · local · encrypted</span>
-            <span style={{color:'var(--ink-3)'}}>AES-256 · XChaCha20</span>
+            <span>Vault · wallet-encrypted</span>
+            <span style={{color:'var(--ink-3)'}}>wallet sig · AES-256</span>
           </div>
           <div className="vault-body">
             <div className="vault-disk">
@@ -672,7 +672,7 @@ function VaultSection() {
                 ['emotional state', '8 floats'],
                 ['relationship',    '4 floats'],
                 ['open threads',    '7'],
-                ['vault key',       'argon2id'],
+                ['vault key',       'wallet sig'],
               ].map(r => (
                 <div className="vault-row" key={r[0]}>
                   <span className="dot" style={{background: 'var(--ink-3)'}}></span>
@@ -684,16 +684,16 @@ function VaultSection() {
             </div>
           </div>
           <div className="vault-foot">
-            <span>desktop · macOS · arm64</span>
-            <span style={{color:'var(--live)'}}>0 bytes → cloud</span>
+            <span>browser · privy wallet · any device</span>
+            <span style={{color:'var(--live)'}}>0 bytes plaintext → cloud</span>
           </div>
         </div>
         <div className="vault-principles">
           {[
-            { k: 'Local-first',        t: 'The vault never leaves.',               d: 'Episodes, embeddings, relationship state, threads — all written to an encrypted SQLite file on your disk. The runtime reads from it directly. There is no server to phone home to.' },
-            { k: 'Venice.ai inference', t: 'Zero retention on every call.',         d: "Model calls go through Venice.ai under no-retention. Your messages aren't logged, mined, or used for training. The character's memory is the only thing that ever stores what was said — and you own the file." },
+            { k: 'Wallet-encrypted',    t: 'Your signature, your data.',            d: 'Episodes, embeddings, relationship state, threads — all encrypted using your wallet signature. No passphrase to remember, no server holding a copy. Connect your wallet to unlock.' },
+            { k: 'Venice.ai inference', t: 'Zero retention on every call.',         d: "Model calls go through Venice.ai under no-retention. Your messages aren't logged, mined, or used for training. The character's memory is the only thing that ever stores what was said — and only you can read it." },
             { k: 'Nillion TEE · $NIL',  t: 'Custom models run in trusted hardware.', d: "Our memory and emotion models are being deployed to Nillion TEEs — trusted execution environments where even the operator can't see what runs. Verifiable, sealed, ours." },
-            { k: 'You hold the key',    t: 'No copy, no backdoor.',                 d: 'Vault sealed with a passphrase-derived key (Argon2id → XChaCha20). Lose the passphrase, lose the character. Export anything as plaintext JSON. Delete the file and it\'s gone.' },
+            { k: 'Privy auth',          t: 'Connect once. Always yours.',           d: 'Log in with your wallet via Privy. Your wallet signature is the only key that can decrypt your characters. Lose access to your wallet, lose the characters — no backdoor, no recovery by us.' },
           ].map(p => (
             <div className="vault-card" key={p.k}>
               <div className="kc">{p.k}</div>
@@ -713,11 +713,11 @@ function SurfacesSection() {
   return (
     <section className="section" id="surfaces-sect">
       <div className="section-head">
-        <div className="section-id"><span className="num">// 08</span><span className="name">The desktop app · three surfaces</span></div>
-        <h2 className="section-title">The <span className="alt">desktop</span> <span className="cold">app.</span></h2>
+        <div className="section-id"><span className="num">// 08</span><span className="name">The web app · three surfaces</span></div>
+        <h2 className="section-title">The <span className="alt">web</span> <span className="cold">app.</span></h2>
       </div>
       <p className="section-sub" style={{marginTop:-32, marginBottom: 56}}>
-        Chat, characters, and a dashboard to inspect what&apos;s happening under the hood. Offline-capable. Everything local.
+        Chat, characters, and a dashboard to inspect what&apos;s happening under the hood. Runs in your browser. Connect your wallet to start.
       </p>
       <div className="surfaces">
         <div className="surf big">
@@ -791,7 +791,7 @@ function SurfacesSection() {
           <div className="surf-h">
             <span className="dots"><i></i><i></i><i></i></span>
             <span className="title">dashboard · 7d</span>
-            <span className="meta">all local</span>
+            <span className="meta">wallet-encrypted</span>
           </div>
           <div className="surf-body">
             <div className="dash-grid">
@@ -849,7 +849,7 @@ function SDKSection() {
         <h2 className="section-title">The same engine, <span className="acc">as an SDK.</span></h2>
       </div>
       <p className="section-sub" style={{marginTop:-32, marginBottom: 56}}>
-        Drop the emotion, memory, and relationship layer into your own product. Game, companion app, roleplay platform — anything that benefits from characters that remember.
+        Drop the emotion, memory, and relationship layer into your own product. Game, companion app, roleplay platform — anything that benefits from characters that remember. Everything private by default: wallet-encrypted state, zero-retention inference, TEE models.
       </p>
       <div className="sdk-wrap">
         <div className="sdk-info">
@@ -878,6 +878,21 @@ function SDKSection() {
             Free for indie builds · commercial terms by email
           </div>
         </div>
+        <div className="roadmap-block">
+          <div className="roadmap-label">On the roadmap · fully private</div>
+          <div className="roadmap-items">
+            {[
+              { tag: 'SDK',       desc: 'Drop CharacterOS into any app. Same engine, same privacy guarantees. Wallet-encrypted state, Venice inference, Nillion TEE — your users keep ownership.' },
+              { tag: 'Image gen', desc: 'Characters that express themselves visually. Private image generation through zero-retention inference. No prompts stored, no outputs logged.' },
+              { tag: 'Video gen', desc: 'Full scene generation tied to emotional state. What a character feels shapes how they look and move. All inference stays private.' },
+            ].map(r => (
+              <div className="roadmap-item" key={r.tag}>
+                <div className="roadmap-tag">{r.tag}</div>
+                <div className="roadmap-desc">{r.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
         <div className="sdk-code">
           <div className="ch">
             <span className="dots"><i></i><i></i><i></i></span>
@@ -887,10 +902,10 @@ function SDKSection() {
           <pre dangerouslySetInnerHTML={{ __html:
 `<span class="ck">import</span> { CharacterOS } <span class="ck">from</span> <span class="cs">'@characteros/sdk'</span>
 
-<span class="cc">// One character. Local vault. Lives across sessions.</span>
+<span class="cc">// One character. Wallet-encrypted. Lives across sessions.</span>
 <span class="ck">const</span> luna = <span class="ck">await</span> CharacterOS.<span class="cf">load</span>({
   id: <span class="cs">'luna'</span>,
-  vault: <span class="cs">'~/.characteros/luna.vault'</span>,
+  auth: { provider: <span class="cs">'privy'</span>, walletSig: sig },
   inference: { provider: <span class="cs">'venice'</span>, mode: <span class="cs">'no-retention'</span> },
   models: { tee: <span class="cs">'nillion'</span> },
 })

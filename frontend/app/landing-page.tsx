@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { usePrivy } from '@privy-io/react-auth';
 import './landing.css';
 
 // ─── HUD PRIMITIVES ────────────────────────────────────────
@@ -204,9 +205,9 @@ function TopNav() {
     <nav className="topnav">
       <span className="brand" data-text="CHARACTER OS">
         <svg className="brand-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="M8 2A6 6 0 0 1 14 8" stroke="#8fd6a8" strokeWidth="1.5" strokeLinecap="round"/>
-          <path d="M8 14A6 6 0 0 1 2 8" stroke="rgba(143,214,168,0.35)" strokeWidth="1.5" strokeLinecap="round"/>
-          <circle cx="8" cy="8" r="2" fill="#8fd6a8"/>
+          <path d="M8 2A6 6 0 0 1 14 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+          <path d="M8 14A6 6 0 0 1 2 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" opacity={0.35}/>
+          <circle cx="8" cy="8" r="2.5" fill="currentColor"/>
         </svg>
         CHARACTER<span className="brand-os">OS</span>
       </span>
@@ -217,7 +218,7 @@ function TopNav() {
       <div className="right">
         <a href="/docs">DOCS</a>
         <a href="/docs#privacy-section">PRIVACY</a>
-        <a href="/docs#surfaces-sect">APP</a>
+        <a href="/characters">APP</a>
         <a href="/docs#sdk-sect">SDK</a>
         <a className="primary" href="#waitlist">JOIN BETA ↗</a>
       </div>
@@ -401,24 +402,33 @@ function CompareSection() {
 // ─── BETA ─────────────────────────────────────────────────
 
 function BetaSection() {
-  const [email, setEmail] = useState('');
-  const [sent, setSent] = useState(false);
-  const [position, setPosition] = useState(0);
+  const { login, authenticated, user } = usePrivy();
+  const [joined, setJoined] = useState(false);
+  const [count, setCount] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const t = setTimeout(() => {
-      const n = 2400 + Math.floor(Math.random() * 80);
-      const start = performance.now();
-      const tick = (now: number) => {
-        const k = Math.min(1, (now - start) / 1400);
-        const eased = 1 - Math.pow(1 - k, 3);
-        setPosition(Math.round(n * eased));
-        if (k < 1) requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    }, 400);
-    return () => clearTimeout(t);
+    fetch('http://localhost:3001/api/waitlist/count')
+      .then(r => r.json())
+      .then(d => setCount(d.count))
+      .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!authenticated || !user || joined) return;
+    setLoading(true);
+    const wallet = user.wallet?.address ?? null;
+    const email  = user.email?.address ?? null;
+    fetch('http://localhost:3001/api/waitlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ privyId: user.id, wallet, email }),
+    })
+      .then(r => r.json())
+      .then(d => { setJoined(true); if (d.position) setCount(d.position); })
+      .catch(() => setJoined(true))
+      .finally(() => setLoading(false));
+  }, [authenticated, user, joined]);
 
   return (
     <section className="beta-section reveal" id="waitlist">
@@ -436,26 +446,28 @@ function BetaSection() {
           <span className="acc soul-glow">Limited seats.</span>
         </h2>
         <p className="beta-sub">
-          Drop your email and we&apos;ll reach out when your spot opens up.
+          Connect your wallet or email to reserve your spot.
         </p>
         <div className="beta-stats">
-          <div className="bs"><div className="bsn">{position.toLocaleString()}</div><div className="bsl">on the list</div></div>
           <div className="bs"><div className="bsn">~weekly</div><div className="bsl">invite drops</div></div>
-          <div className="bs"><div className="bsn">macOS · Windows</div><div className="bsl">desktop runtime</div></div>
+          <div className="bs"><div className="bsn">0 logs</div><div className="bsl">fully private</div></div>
         </div>
-        {sent ? (
+        {joined || (authenticated && user) ? (
           <div className="beta-done">
             <div className="bd-h">✓ You&apos;re on the list.</div>
             <div className="bd-b">We&apos;ll write when your spot is ready. No spam.</div>
           </div>
         ) : (
-          <form className="beta-form" onSubmit={e => { e.preventDefault(); if (email) setSent(true); }}>
-            <input type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="your@email" autoComplete="email" />
-            <button type="submit" className="btn primary">Join the beta <span className="arrow">→</span></button>
-          </form>
+          <button
+            className="btn primary"
+            onClick={login}
+            disabled={loading}
+          >
+            {loading ? 'Saving…' : 'Connect to join beta'} <span className="arrow">→</span>
+          </button>
         )}
         <div className="beta-foot">
-          <span><span className="dot-live"></span>Local-first storage</span>
+          <span><span className="dot-live"></span>Wallet-encrypted storage</span>
           <span><span className="dot-live"></span>Inference via Venice.ai · zero retention</span>
           <span><span className="dot-live"></span>Custom models on Nillion TEE</span>
         </div>
